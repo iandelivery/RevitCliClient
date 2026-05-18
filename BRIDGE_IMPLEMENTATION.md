@@ -1,6 +1,10 @@
 # CLI Bridge Server Implementation Guide
 
-This document describes the architecture and protocol that a compatible CLI Bridge server must implement to work with RevitCliClient. It is intended as a **reference specification** — you can implement your own server in any language or framework, as long as it conforms to the HTTP API contract described below.
+> **Open-Source vs. Proprietary Notice**
+>
+> **RevitCliClient** (this repository) is open-source software licensed under MIT. It includes the CLI client, argument parsing, HTTP communication, and all documentation you are reading now.
+>
+> The **CLI Bridge server** (the Revit add-in that receives HTTP requests and executes Revit API calls) is a **proprietary component** and is not included in this repository. This document provides an architectural overview, protocol specification, and reference implementation examples to help you build your own compatible bridge server. The code examples below illustrate standard Revit API patterns and are not the actual proprietary implementation.
 
 ## The Core Problem
 
@@ -11,11 +15,11 @@ Revit's API is strictly single-threaded and bound to the Revit UI process. Exter
 3. Return the results back to the caller
 
 ```
-┌──────────────┐     HTTP      ┌───────────────┐    IPC    ┌──────────────────┐
-│  CLI Client  │ ─────────────►│  HTTP Server  │ ─────────►│  Revit Main      │
-│  AI Agent    │               │  (Bridge)     │           │  Thread          │
-│              │◄──────────────│               │◄──────────│  (API Execution) │
-└──────────────┘    JSON       └───────────────┘   Result  └──────────────────┘
+┌───────────────┐     HTTP      ┌───────────────┐    IPC    ┌──────────────────┐
+│  CLI Client   │ ─────────────►│  HTTP Server  │ ─────────►│  Revit Main      │
+│  (Open Source)│               │  (Bridge)     │           │  Thread          │
+│               │◄──────────────│  (Your impl.) │◄──────────│  (API Execution) │
+└───────────────┘    JSON       └───────────────┘   Result  └──────────────────┘
 ```
 
 ## Architecture Overview
@@ -69,14 +73,14 @@ pending → running → completed
                   → timeout
 ```
 
-**Example implementation:**
+**Reference implementation:**
 
 ```csharp
 public class TaskInfo
 {
-    public string TaskId { get; set; }
-    public string Command { get; set; }
-    public string Status { get; set; }  // pending, running, completed, failed, timeout
+    public string TaskId { get; set; } = string.Empty;
+    public string Command { get; set; } = string.Empty;
+    public string Status { get; set; } = "pending";
     public int Progress { get; set; }
     public string? ProgressMessage { get; set; }
     public string? ResultJson { get; set; }
@@ -101,7 +105,7 @@ public static class TaskRegistry
         return info;
     }
 
-    public static void SetRunning(string taskId) { /* update status */ }
+    public static void SetRunning(string taskId) { /* update status + started_at */ }
     public static void SetProgress(string taskId, int pct, string? msg = null) { /* update progress */ }
     public static void SetCompleted(string taskId, string resultJson) { /* update + signal Tcs */ }
     public static void SetFailed(string taskId, string errorJson) { /* update + signal Tcs */ }
@@ -112,7 +116,7 @@ public static class TaskRegistry
 
 This is the **only** safe way to execute code on the Revit main thread from a background thread.
 
-**Implementation pattern:**
+**Reference implementation:**
 
 ```csharp
 public class CliCommandHandler : IExternalEventHandler
@@ -147,6 +151,8 @@ public class CliCommandHandler : IExternalEventHandler
 
 A registry pattern that maps command names to handler functions.
 
+**Reference implementation:**
+
 ```csharp
 public static class CommandRouter
 {
@@ -178,6 +184,8 @@ public static class CommandRouter
 
 Each command has a dedicated handler. Handlers follow a consistent pattern:
 
+**Reference implementation (create_wall):**
+
 ```csharp
 public static class CreateWallHandler
 {
@@ -190,10 +198,11 @@ public static class CreateWallHandler
         var parameters = cmd.Parameters as Dictionary<string, object>
             ?? new Dictionary<string, object>();
 
-        // Extract parameters
         var levelId = Convert.ToInt32(parameters["level_id"]);
         var startX = Convert.ToDouble(parameters["start_x"]);
-        // ...
+        var startY = Convert.ToDouble(parameters["start_y"]);
+        var endX = Convert.ToDouble(parameters["end_x"]);
+        var endY = Convert.ToDouble(parameters["end_y"]);
 
         using (var t = new Transaction(doc, "CLI: Create Wall"))
         {
@@ -202,7 +211,6 @@ public static class CreateWallHandler
             options.SetFailuresPreprocessor(new CliFailurePreprocessor());
             t.SetFailureHandlingOptions(options);
 
-            // Revit API calls
             var level = doc.GetElement(new ElementId(levelId)) as Level;
             var start = new XYZ(startX.MmToFeet(), startY.MmToFeet(), 0);
             var end = new XYZ(endX.MmToFeet(), endY.MmToFeet(), 0);
@@ -217,9 +225,35 @@ public static class CreateWallHandler
 }
 ```
 
+**Batch operations with TransactionGroup:**
+
+The `batch` command wraps multiple sub-commands in a `TransactionGroup` for atomicity:
+
+```csharp
+using (var tg = new TransactionGroup(doc, name))
+{
+    tg.Start();
+
+    foreach (var operation in operations)
+    {
+        var result = CommandRouter.Execute(app, subCommand);
+
+        if (result is error && rollbackOnError)
+        {
+            tg.RollBack();
+            return error response;
+        }
+    }
+
+    tg.Assimilate();  // Merge all transactions into one undo item
+}
+```
+
 ### L6 — Failure Preprocessor
 
 **Critical for AI agents.** Without this, Revit will pop up modal dialogs that freeze the entire workflow.
+
+**Reference implementation:**
 
 ```csharp
 public class CliFailurePreprocessor : IFailuresPreprocessor
@@ -332,7 +366,7 @@ Returns the current state of a task.
     "command": "create_walls",
     "status": "running",
     "progress": 50,
-    "progress_message": "Creating wall 50/100...",
+    "progress_message": "Executing set_parameter (2/3)...",
     "started_at": "2024-01-15T14:30:45+08:00",
     "completed_at": null
 }
@@ -343,7 +377,7 @@ When completed:
 ```json
 {
     "task_id": "abc-123",
-    "command": "create_walls",
+    "command": "batch",
     "status": "completed",
     "progress": 100,
     "started_at": "2024-01-15T14:30:45+08:00",
@@ -351,7 +385,7 @@ When completed:
     "result": {
         "task_id": "abc-123",
         "status": "success",
-        "data": { "results": [...] }
+        "data": { "total": 3, "succeeded": 3, "failed": 0 }
     }
 }
 ```
@@ -483,23 +517,15 @@ Internal model representing a command waiting to be executed:
 ```csharp
 public class QueuedCommand
 {
-    public string TaskId { get; set; }
-    public string Command { get; set; }
+    public string TaskId { get; set; } = string.Empty;
+    public string Command { get; set; } = string.Empty;
     public object? Parameters { get; set; }
 }
 ```
 
 ## Unit Convention
 
-All dimension parameters in CLI commands use **millimeters (mm)**. The server-side handler must convert to Revit's internal **feet**:
-
-```csharp
-// mm → feet (1 ft = 304.8 mm)
-public static double MillimeterToFeet(this double mm) => mm / 304.8;
-
-// feet → mm
-public static double FeetToMillimeter(this double feet) => feet * 304.8;
-```
+Revit's internal unit system uses **decimal feet** for length dimensions. The bridge server is responsible for converting between these units when translating CLI parameters into Revit API calls.
 
 ## Command Naming Convention
 
@@ -509,8 +535,8 @@ public static double FeetToMillimeter(this double feet) => feet * 304.8;
 | Create | `create_` | `create_wall`, `create_grid` |
 | Set | `set_` | `set_parameter`, `set_wall_constraint` |
 | Transform | `verb_element` | `move_element`, `rotate_element` |
-| Batch | `batch_` or plural | `batch_set_param`, `create_walls` |
-| Other | direct verb | `delete_element`, `undo` |
+| Batch | `batch` or `batch_` | `batch`, `batch_set_param` |
+| Other | direct verb | `delete`, `undo`, `hide_elements` |
 
 ## Add-in Integration
 
@@ -575,6 +601,7 @@ public class ToggleBridgeCommand : IExternalCommand
 | Invalid parameters | Type-safe parsing + handler validation |
 | External network exposure | Listen on `localhost` only |
 | Task memory leak | Periodic cleanup of completed tasks (e.g., after 5 min) |
+| Batch atomicity | `TransactionGroup` with rollback on error |
 
 ## Minimum Viable Server
 
@@ -587,4 +614,4 @@ To implement a compatible server, you need at minimum:
 5. **IFailuresPreprocessor** to prevent dialog freezes
 6. **CommandResponse** JSON format for all results
 
-Everything else (command handlers, routing, state management, progress reporting) can be customized to your needs.
+Everything else (command handlers, routing, state management, progress reporting, batch operations) can be customized to your needs.

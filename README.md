@@ -27,7 +27,7 @@ The CLI client is the **left side** of this architecture — it sends HTTP reque
 
 ## Features
 
-- **45+ Commands** — Query, create, modify, transform, and export Revit elements
+- **46+ Commands** — Query, create, modify, transform, and export Revit elements
 - **Async Task Mode** — Long-running commands return a task ID for polling
 - **Type-Safe Argument Parsing** — Built-in `ArgHelper` with shortcuts for all parameters
 - **Unit Conversion** — Input in millimeters, auto-converted to Revit internal feet
@@ -161,6 +161,7 @@ RevitCliClient.exe create_wall --start-x 0 --start-y 0 --end-x 5000 --end-y 0 -l
 
 | Command                                                                                                  | Description                |
 | -------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `batch -j <json> \| -fl <path> [-n <name>] [--no-rollback] [--no-assimilate]`                            | Execute multiple commands in a TransactionGroup |
 | `set_param -i <id> -n <name> -v <value>`                                                                 | Set parameter value        |
 | `batch_set_param -n <param> -v <val> --ids <ids> \| -c <cat> \| -s`                                      | Batch set parameter        |
 | `set_wall_constraint -w <id> --top-level-id <id> \| --base-level-id <id>`                                | Set wall constraint        |
@@ -200,6 +201,106 @@ RevitCliClient.exe raw -j '{"command":"ping"}'
 ```
 
 ## Command Details
+
+### batch
+
+Execute multiple CLI commands as a single atomic operation using Revit's `TransactionGroup`. All operations are wrapped in one transaction group, providing:
+
+- **Atomicity** — If any operation fails, the entire group is rolled back (default behavior)
+- **Single Undo** — All operations merge into one undo item (`Assimilate` mode)
+- **Result References** — Use `$0`, `$1` to reference element IDs from previous operations
+
+**Syntax:**
+
+```bash
+RevitCliClient.exe batch -j <json> | -fl <path> [-n <name>] [--no-rollback] [--no-assimilate]
+```
+
+**Parameters:**
+
+| Parameter        | Shortcut | Required | Description                                                |
+| ---------------- | -------- | -------- | ---------------------------------------------------------- |
+| `--json`         | `-j`     | Yes*     | JSON operations (or use `--file`)                          |
+| `--file`         | `-fl`    | Yes*     | Path to JSON file containing operations                    |
+| `--name`         | `-n`     | No       | Transaction group name (shown in Revit undo history)       |
+| `--no-rollback`  | —        | No       | Continue on error instead of rolling back (default: rollback) |
+| `--no-assimilate`| —        | No       | Keep separate undo items instead of merging into one       |
+
+**JSON Format (simple array):**
+
+```json
+[
+  {"command": "create_wall", "parameters": {"level_id": 3001, "start_x": 0, "start_y": 0, "end_x": 5000, "end_y": 0}},
+  {"command": "set_param", "parameters": {"element_id": "$0", "param_name": "Comments", "param_value": "New wall"}},
+  {"command": "rotate_element", "parameters": {"element_id": "$0", "angle": 45}}
+]
+```
+
+**JSON Format (with options):**
+
+```json
+{
+  "name": "Create and configure door",
+  "rollback_on_error": true,
+  "assimilate": true,
+  "operations": [
+    {"command": "create_family_instance", "parameters": {"symbol_id": 950367, "level_id": 3001, "x": 2500, "y": 0}},
+    {"command": "set_param", "parameters": {"element_id": "$0", "param_name": "Comments", "param_value": "Main entrance"}},
+    {"command": "rotate_element", "parameters": {"element_id": "$0", "angle": 90}}
+  ]
+}
+```
+
+**Result References:**
+
+| Syntax     | Meaning                                        |
+| ---------- | ---------------------------------------------- |
+| `$0`       | `element_id` from operation 0's result         |
+| `$1`       | `element_id` from operation 1's result         |
+| `$0.data.element_id` | Explicit path to any field in result  |
+
+**Examples:**
+
+```bash
+# Create a wall and set its parameter (atomic)
+RevitCliClient.exe batch -j '[{"command":"create_wall","parameters":{"level_id":3001,"start_x":0,"start_y":0,"end_x":5000,"end_y":0}},{"command":"set_param","parameters":{"element_id":"$0","param_name":"Comments","param_value":"New wall"}}]'
+
+# Load operations from a file
+RevitCliClient.exe batch -fl operations.json -n "Batch creation"
+
+# Continue on error (don't rollback)
+RevitCliClient.exe batch -fl ops.json --no-rollback
+```
+
+**Expected response (success):**
+
+```json
+{
+  "status": "success",
+  "data": {
+    "name": "CLI Batch",
+    "total": 3,
+    "succeeded": 3,
+    "failed": 0,
+    "rollback": false,
+    "results": [
+      {"index": 0, "command": "create_wall", "status": "success", "message": "Wall created.", "data": {"element_id": 600123}},
+      {"index": 1, "command": "set_param", "status": "success", "message": "Parameter set.", "data": null},
+      {"index": 2, "command": "rotate_element", "status": "success", "message": "Element rotated.", "data": null}
+    ]
+  }
+}
+```
+
+**Expected response (rollback on failure):**
+
+```json
+{
+  "status": "error",
+  "message": "Operation 2 ('rotate_element') failed. Transaction group 'CLI Batch' rolled back. All 2 previously committed operations have been undone.",
+  "error_details": "{\"name\":\"CLI Batch\",\"rollback\":true,\"failed_at_index\":2,...}"
+}
+```
 
 ### get_symbol_instances
 
@@ -374,6 +475,7 @@ RevitCliClient/
     ├── PlaceOnSheetHandler.cs
     ├── BatchExportHandler.cs
     ├── TagRoomsHandler.cs
+    ├── BatchHandler.cs
     ├── HideElementsHandler.cs
     ├── UndoHandler.cs
     └── TransformElementHandlers.cs   # Move, Copy, Rotate, Mirror, SetOffset
