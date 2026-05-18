@@ -154,6 +154,8 @@ namespace RevitCliClient
                     return await HideElementsHandler.HandleAsync(args, SendCommandAsync, "hide_elements");
                 case "unhide_elements":
                     return await HideElementsHandler.HandleAsync(args, SendCommandAsync, "unhide_elements");
+                case "batch":
+                    return await BatchHandler.HandleAsync(args, SendCommandAsync);
                 case "task":
                     return await HandleTaskCommandAsync(args);
                 case "raw":

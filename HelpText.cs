@@ -64,6 +64,7 @@ Commands:
   create_room -l <id> --x <mm> --y <mm> [-n <name>] [--number <number>]  Create room
 
   [Modify]
+  batch -j <json> | -fl <path> [-n <name>] [--no-rollback] [--no-assimilate]  Execute multiple commands in a TransactionGroup
   set_param -i <id> -n <name> -v <value>  Set parameter value
   batch_set_param -n <param> -v <val> --ids <id1,id2,...> | -c <cat> | -s  Batch set parameter
   set_wall_constraint -w <id> --top-level-id <id> | --base-level-id <id>  Set wall constraint
@@ -119,6 +120,7 @@ Examples:
   RevitCliClient.exe hide_elements -e 599906,599841
   RevitCliClient.exe unhide_elements -e 599906,599841 -vi 3001
   RevitCliClient.exe undo -st 3
+  RevitCliClient.exe batch -j ""[{\""command\"":\""create_wall\"",\""parameters\"":{\""level_id\"":3001,\""start_x\"":0,\""start_y\"":0,\""end_x\"":5000,\""end_y\"":0}},{\""command\"":\""set_param\"",\""parameters\"":{\""element_id\"":\""$0\"",\""param_name\"":\""Comments\"",\""param_value\"":\""New wall\""}}]""
   RevitCliClient.exe raw -j ""{\""command\"":\""ping\""}""
 
 Options:
