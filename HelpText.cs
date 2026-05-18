@@ -88,7 +88,7 @@ Commands:
   set_active_view -vi <id> | -vn <name>  Set active view
   zoom_to_fit [-e <id> | --element-ids <id1,id2,...>]  Zoom to fit
   select_elements [-e <id1,id2,...>]  Get or set selection
-  export_view [-o <path>] [--fit-direction <h/v>] [--zoom-type <fit/zoom>] [--resolution <dpi>]
+  export_view [-o <path>] [--fit-direction <h/v>] [--zoom-type <fit/zoom>] [--dpi <72|150|300|600>] [-t <png|jpeg|bmp|tiff>] [--shadow-file-type <png|jpeg|bmp|tiff>] [--resolution <px>] [--export-range <current_view|visible_region>]
   batch_export -f <pdf|dwg|img> --view-ids <id1,id2,...> | --sheet-ids <id1,id2,...> | -a [-o <path>] [--pdf-setup <name>] [--dwg-setup <name>]  Batch export
 
   [Raw]
@@ -117,6 +117,8 @@ Examples:
   RevitCliClient.exe batch_set_param -n ""Comments"" -v ""Approved"" --ids 599906,599841
   RevitCliClient.exe search_elements -c OST_Walls --param-name ""Comments"" --param-value ""demolish""
   RevitCliClient.exe export_view -o ""C:\temp\view.png""
+  RevitCliClient.exe export_view -o ""C:\temp\view.jpg"" -t jpeg --dpi 600
+  RevitCliClient.exe export_view -o ""C:\temp\view.png"" --resolution 4096 --export-range visible_region
   RevitCliClient.exe hide_elements -e 599906,599841
   RevitCliClient.exe unhide_elements -e 599906,599841 -vi 3001
   RevitCliClient.exe undo -st 3

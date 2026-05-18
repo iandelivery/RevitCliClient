@@ -191,7 +191,7 @@ RevitCliClient.exe create_wall --start-x 0 --start-y 0 --end-x 5000 --end-y 0 -l
 | `set_active_view -vi <id> \| -vn <name>`                                                        | Set active view      |
 | `zoom_to_fit [-e <id> \| --element-ids <ids>]`                                                  | Zoom to fit          |
 | `select_elements [-e <ids>]`                                                                    | Get or set selection |
-| `export_view [-o <path>] [--fit-direction <h/v>] [--zoom-type <fit/zoom>] [--resolution <dpi>]` | Export view as image |
+| `export_view [-o <path>] [--dpi <72\|150\|300\|600>] [--resolution <px>] [-t <type>] [...]` | Export view as image |
 | `batch_export -f <pdf\|dwg\|img> --view-ids <ids> \| --sheet-ids <ids> \| -a [-o <path>]`       | Batch export         |
 
 ### Raw JSON
