@@ -36,7 +36,7 @@ The CLI client is the **left side** of this architecture — it sends HTTP reque
 
 ## Requirements
 
-- **.NET 6.0 SDK** — for building
+- **.NET 8.0 SDK** — for building
 - **Revit** — with the CLI Bridge add-in installed and running
 - **Windows x64** — for the published executable
 
@@ -49,16 +49,29 @@ dotnet build -c Release
 ### Publish as Single-File EXE
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishAot=false -o ./publish
+```
+
+### Publish as Native AOT
+
+```powershell
+dotnet publish -c Release -r win-x64 -o ./publish
 ```
 
 Or use the included script:
 
 ```powershell
+# Single-file (default)
 .\publish.ps1
+
+# Native AOT
+.\publish.ps1 --aot
 ```
 
-The output is a single `RevitCliClient.exe` (~30 MB, self-contained).
+| Mode | Startup | Size | Notes |
+|------|---------|------|-------|
+| Single-File | ~1s | ~30 MB | Self-contained, no runtime needed |
+| Native AOT | Instant | ~5-10 MB | Fastest startup, smallest binary |
 
 ## Quick Start
 
@@ -478,7 +491,7 @@ For server-side configuration, see [`BRIDGE_IMPLEMENTATION.md`](BRIDGE_IMPLEMENT
 ## Dependencies
 
 - **Newtonsoft.Json 13.0.3** — JSON serialization
-- **.NET 6.0** — Target framework
+- **.NET 8.0** — Target framework
 
 No Revit API dependency. The CLI client can be compiled and run independently.
 
