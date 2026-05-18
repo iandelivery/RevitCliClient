@@ -102,6 +102,8 @@ namespace RevitCliClient
                     return await SetWallsConstraintCliHandler.HandleAsync(args, SendCommandAsync);
                 case "get_family_symbol":
                     return await GetFamilySymbolHandler.HandleAsync(args, SendCommandAsync);
+                case "get_symbol_instances":
+                    return await GetSymbolInstancesHandler.HandleAsync(args, SendCommandAsync);
                 case "create_family_instance":
                     return await CreateFamilyInstanceHandler.HandleAsync(args, SendCommandAsync);
                 case "move_element":
@@ -148,6 +150,10 @@ namespace RevitCliClient
                     return await TagRoomsHandler.HandleAsync(args, SendCommandAsync);
                 case "undo":
                     return await UndoHandler.HandleAsync(args, SendCommandAsync);
+                case "hide_elements":
+                    return await HideElementsHandler.HandleAsync(args, SendCommandAsync, "hide_elements");
+                case "unhide_elements":
+                    return await HideElementsHandler.HandleAsync(args, SendCommandAsync, "unhide_elements");
                 case "task":
                     return await HandleTaskCommandAsync(args);
                 case "raw":
