@@ -1,15 +1,27 @@
 $ProjectPath = Join-Path $PSScriptRoot "RevitCliClient.csproj"
 $OutputPath = Join-Path $PSScriptRoot "publish"
 
+$Aot = $args -contains "--aot"
+
 Write-Host "Publishing Revit CLI Client..." -ForegroundColor Cyan
 
-dotnet publish $ProjectPath `
-  -c Release `
-  -r win-x64 `
-  --self-contained true `
-  -p:PublishSingleFile=true `
-  -p:IncludeNativeLibrariesForSelfExtract=true `
-  -o $OutputPath
+if ($Aot) {
+    Write-Host "Mode: Native AOT" -ForegroundColor Yellow
+    dotnet publish $ProjectPath `
+      -c Release `
+      -r win-x64 `
+      -o $OutputPath
+} else {
+    Write-Host "Mode: Single-File (self-contained)" -ForegroundColor Yellow
+    dotnet publish $ProjectPath `
+      -c Release `
+      -r win-x64 `
+      --self-contained true `
+      -p:PublishSingleFile=true `
+      -p:IncludeNativeLibrariesForSelfExtract=true `
+      -p:PublishAot=false `
+      -o $OutputPath
+}
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`nPublished successfully!" -ForegroundColor Green
