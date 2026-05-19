@@ -149,7 +149,7 @@ public class CliCommandHandler : IExternalEventHandler
 
 ### L4 — Command Router
 
-A registry pattern that maps command names to handler functions.
+A registry pattern that maps command names to handler functions. Supports runtime registration for plugin commands.
 
 **Reference implementation:**
 
@@ -179,6 +179,49 @@ public static class CommandRouter
     }
 }
 ```
+
+### L4.1 — Bridge Plugin Loading
+
+The Bridge server supports loading proprietary command handlers from external DLLs at startup. This mirrors the CLI client's plugin architecture.
+
+**Plugin interface** (defined in `RevitCliClient.Bridge`):
+
+```csharp
+namespace RevitCliClient.Bridge
+{
+    public interface IBridgeCommand
+    {
+        string CommandName { get; }
+    }
+}
+```
+
+**Plugin loading flow:**
+
+1. On startup, `BridgePluginLoader` scans the `CliBridgePlugins/` directory next to the add-in assembly
+2. For each DLL, it looks for types implementing `IBridgeCommand` with a `static Handle(UIApplication, QueuedCommand)` method
+3. The handler is registered with `CommandRouter.Register()` using the `CommandName` from the interface
+
+**Creating a Bridge plugin:**
+
+```csharp
+using RevitCliClient.Bridge;
+using Autodesk.Revit.UI;
+
+public class MyPluginHandler : IBridgeCommand
+{
+    public string CommandName => "my_plugin_command";
+
+    public static string Handle(UIApplication app, QueuedCommand cmd)
+    {
+        var doc = app.ActiveUIDocument?.Document;
+        // ... Revit API implementation
+        return CommandResponse.Success(cmd.TaskId, result).ToJson();
+    }
+}
+```
+
+**Deployment:** Place the compiled DLL in the `CliBridgePlugins/` directory next to the Revit add-in assembly. The plugin is loaded automatically when the Bridge starts.
 
 ### L5 — Command Handlers
 

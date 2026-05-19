@@ -9,6 +9,10 @@ publish/
 *.suo
 *.cache
 *.vsidx
+*.DotSettings.user
+
+## VS Code
+.vscode/
 
 ## Rider
 .idea/
@@ -20,3 +24,10 @@ Thumbs.db
 ## NuGet
 *.nupkg
 packages/
+project.lock.json
+
+## Test results
+TestResults/
+
+## Misc
+*.log

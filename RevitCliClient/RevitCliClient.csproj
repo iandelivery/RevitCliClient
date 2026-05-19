@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0</TargetFramework>
+		<LangVersion>latest</LangVersion>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<DisableImplicitNamespaceImports>true</DisableImplicitNamespaceImports>
+		<RootNamespace>RevitCliClient</RootNamespace>
+		<PublishAot>true</PublishAot>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\RevitCliClient.Abstractions\RevitCliClient.Abstractions.csproj" />
+		<ProjectReference Include="..\RevitCliClient.Extensions\RevitCliClient.Extensions.csproj" />
+	</ItemGroup>
+</Project>

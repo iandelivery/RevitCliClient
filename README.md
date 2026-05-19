@@ -43,35 +43,42 @@ The CLI client is the **left side** of this architecture — it sends HTTP reque
 ## Build
 
 ```bash
-dotnet build -c Release
+dotnet build RevitCliClient.sln -c Release
 ```
 
 ### Publish as Single-File EXE
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishAot=false -o ./publish
+dotnet publish RevitCliClient.sln -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishAot=false -o ./publish
 ```
 
 ### Publish as Native AOT
 
 ```powershell
-dotnet publish -c Release -r win-x64 -o ./publish
+dotnet publish RevitCliClient.sln -c Release -r win-x64 -o ./publish
 ```
 
 Or use the included script:
 
 ```powershell
 # Single-file (default)
-.\publish.ps1
+.\RevitCliClient\publish.ps1
 
 # Native AOT
-.\publish.ps1 --aot
+.\RevitCliClient\publish.ps1 --aot
 ```
 
-| Mode | Startup | Size | Notes |
-|------|---------|------|-------|
-| Single-File | ~1s | ~30 MB | Self-contained, no runtime needed |
-| Native AOT | Instant | ~5-10 MB | Fastest startup, smallest binary |
+### Publish Modes
+
+| Mode | Startup | Size | Plugin Support |
+|------|---------|------|----------------|
+| Single-File | ~1s | ~30 MB | Load DLLs from `plugins/` directory at runtime |
+| Native AOT | Instant | ~5-10 MB | Compile-time only — add `ProjectReference` to `.csproj` |
+
+**Plugin compatibility details:**
+
+- **Single-File mode** — Third-party plugins are loaded at runtime from the `plugins/` directory next to `RevitCliClient.exe`. Each plugin is a DLL that implements `IPlugin`. This is the recommended mode if you need runtime extensibility.
+- **Native AOT mode** — Reflection-based plugin loading is not supported. To include plugin commands, add a `ProjectReference` to the plugin project in `RevitCliClient.csproj` so the commands are compiled into the executable at build time.
 
 ## Quick Start
 
@@ -191,7 +198,7 @@ RevitCliClient.exe create_wall --start-x 0 --start-y 0 --end-x 5000 --end-y 0 -l
 | `set_active_view -vi <id> \| -vn <name>`                                                        | Set active view      |
 | `zoom_to_fit [-e <id> \| --element-ids <ids>]`                                                  | Zoom to fit          |
 | `select_elements [-e <ids>]`                                                                    | Get or set selection |
-| `export_view [-o <path>] [--dpi <72\|150\|300\|600>] [--resolution <px>] [-t <type>] [...]` | Export view as image |
+| `export_view [-o <path>] [--fit-direction <h/v>] [--zoom-type <fit/zoom>] [--dpi <72\|150\|300\|600>] [--resolution <px>] [-t <png\|jpeg\|bmp\|tiff>] [--shadow-file-type <png\|jpeg\|bmp\|tiff>] [--pixel-size <px>] [--export-range <current_view\|visible_region>]` | Export view as image |
 | `batch_export -f <pdf\|dwg\|img> --view-ids <ids> \| --sheet-ids <ids> \| -a [-o <path>]`       | Batch export         |
 
 ### Raw JSON
@@ -439,63 +446,89 @@ AI agents can call the REST API directly without the CLI client. For the full AP
 ## Project Structure
 
 ```
-RevitCliClient/
-├── Program.cs                        # CLI entry point, command routing
-├── HelpText.cs                       # Built-in help documentation
-├── RevitCliClient.csproj             # .NET 6.0 project file
-├── publish.ps1                       # PowerShell publish script
-├── publish.bat                       # Batch publish script
-└── Handlers/                         # CLI-side command handlers
-    ├── ArgHelper.cs                  # Shared argument parsing utilities
+RevitCliClient.Abstractions/          # Plugin interfaces (open source)
+├── ArgHelper.cs                      # Shared argument parsing utilities
+├── CommandCategories.cs              # Command category constants
+├── ICliCommand.cs                    # CLI command interface
+├── ICommandMetadata.cs               # Command metadata interface
+├── IPlugin.cs                        # Plugin entry point interface
+├── SendCommandFunc.cs                # Send command delegate
+└── RevitCliClient.Abstractions.csproj # netstandard2.0 + net8.0
+
+RevitCliClient/                       # Core CLI client (open source)
+├── Program.cs                        # CLI entry point, plugin-based routing
+├── CommandRegistry.cs                # Command registry
+├── PluginLoader.cs                   # Runtime plugin loader
+├── HelpText.cs                       # Dynamic help text generation
+├── RevitCliClient.csproj
+├── publish.ps1 / publish.bat          # Publish scripts
+└── Handlers/                          # Built-in command handlers (implement ICliCommand)
     ├── CreateWallHandler.cs
-    ├── CreateWallsHandler.cs
     ├── CreateDoorHandler.cs
-    ├── CreateWindowHandler.cs
-    ├── CreateGridCliHandler.cs
-    ├── CreateFamilyInstanceHandler.cs
-    ├── CreateViewHandler.cs
-    ├── CreateSheetHandler.cs
-    ├── CreateRoomHandler.cs
-    ├── SetWallConstraintCliHandler.cs
-    ├── SetWallsConstraintCliHandler.cs
-    ├── SetParamHandler.cs
-    ├── BatchSetParamHandler.cs
-    ├── ExportViewHandler.cs
-    ├── GetFamilySymbolHandler.cs
-    ├── GetFamilySymbolsCliHandler.cs
-    ├── GetSymbolInstancesHandler.cs
-    ├── SetActiveViewCliHandler.cs
-    ├── ZoomToFitHandler.cs
-    ├── SelectElementsHandler.cs
-    ├── SearchElementsHandler.cs
-    ├── GetViewsHandler.cs
-    ├── ApplyViewTemplateHandler.cs
-    ├── GetSheetsHandler.cs
-    ├── GetRoomsHandler.cs
-    ├── PlaceOnSheetHandler.cs
-    ├── BatchExportHandler.cs
-    ├── TagRoomsHandler.cs
-    ├── BatchHandler.cs
-    ├── HideElementsHandler.cs
-    ├── UndoHandler.cs
-    └── TransformElementHandlers.cs   # Move, Copy, Rotate, Mirror, SetOffset
+    └── ... (30+ handlers)
+
+RevitCliClient.Extensions/            # Extension plugin (open source)
+├── ExtensionsPlugin.cs               # IPlugin entry point
+├── Handlers/
+│   └── ExampleExtensionHandler.cs    # Example extension command
+└── RevitCliClient.Extensions.csproj
 ```
 
 ## Architecture
 
+### Plugin Architecture
+
+The CLI client uses a plugin-based command system:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    RevitCliClient                        │
+│                                                          │
+│  ┌───────────────┐    ┌──────────────┐    ┌───────────┐  │
+│  │ IPlugin       │    │ PluginLoader │    │ Command   │  │
+│  │ Interface     │◄───│ (runtime)    │◄───│ Registry  │  │
+│  └───────────────┘    └──────────────┘    └───────────┘  │
+│         ▲                                   ▲            │
+│  ┌──────┴────────┐                    ┌──────┴───────┐   │
+│  │ Abstractions  │                    │ Built-in     │   │
+│  │ (interfaces)  │                    │ Handlers     │   │
+│  └───────────────┘                    └──────────────┘   │
+└──────────────────────────────────────────────────────────┘
+         ▲                     ▲
+    ┌────┴────────┐      ┌─────┴──────┐
+    │ Extension   │      │ Third-party│
+    │ Plugin DLL  │      │ Plugin DLL │
+    └─────────────┘      └────────────┘
+```
+
+**Command routing flow:**
+
+1. `Program.cs` creates a `CommandRegistry` and registers all built-in handlers
+2. `PluginLoader` scans the `plugins/` directory for DLLs implementing `IPlugin`
+3. Plugin commands are registered alongside built-in commands
+4. When a command is invoked, the registry dispatches to the matching `ICliCommand`
+
 ### Handler Pattern
 
-Each CLI command has a dedicated handler in `Handlers/` that:
+Each CLI command has a dedicated handler in `Handlers/` that implements `ICliCommand`:
 
-1. Parses arguments using `ArgHelper`
-2. Constructs the request payload
-3. Sends it to the Revit server via `SendCommandAsync`
-4. Returns the exit code
+1. Declares command metadata (`CommandName`, `Description`, `Usage`, `Category`)
+2. Parses arguments using `ArgHelper`
+3. Constructs the request payload
+4. Sends it to the Revit server via `SendCommandFunc`
+5. Returns the exit code
 
 ```csharp
-public static class CreateWallHandler
+using RevitCliClient.Abstractions;
+
+public class CreateWallHandler : ICliCommand
 {
-    public static async Task<int> HandleAsync(string[] args, Func<string, object?, Task<int>> send)
+    public string CommandName => "create_wall";
+    public string Description => "Create wall";
+    public string Usage => "create_wall --start-x <x> --start-y <y> --end-x <x> --end-y <y> -l <id>";
+    public CommandCategory Category => CommandCategory.Create;
+
+    public async Task<int> HandleAsync(string[] args, SendCommandFunc sendCommand)
     {
         var levelId = ArgHelper.GetInt(args, "--level-id", "-l");
         if (levelId == null) { Console.WriteLine("Error: --level-id is required"); return 1; }
@@ -505,7 +538,7 @@ public static class CreateWallHandler
         var endX = ArgHelper.GetDouble(args, "--end-x");
         var endY = ArgHelper.GetDouble(args, "--end-y");
 
-        return await send("create_wall", new {
+        return await sendCommand("create_wall", new {
             level_id = levelId,
             start_x = startX, start_y = startY,
             end_x = endX, end_y = endY
@@ -558,28 +591,129 @@ CLI Input: 5000 mm → Server: 5000 × 0.00328084 = 16.404 ft → Revit API
 
 ## Adding a New Command
 
-1. Create a handler in `Handlers/`:
+### Option 1: Built-in Command (Open Source)
+
+1. Create a handler in `Handlers/` implementing `ICliCommand`:
 
 ```csharp
-public static class MyCommandHandler
+using RevitCliClient.Abstractions;
+
+public class MyCommandHandler : ICliCommand
 {
-    public static async Task<int> HandleAsync(string[] args, Func<string, object?, Task<int>> send)
+    public string CommandName => "my_command";
+    public string Description => "My command description";
+    public string Usage => "my_command -n <name>";
+    public CommandCategory Category => CommandCategory.Create;
+
+    public async Task<int> HandleAsync(string[] args, SendCommandFunc sendCommand)
     {
         var name = ArgHelper.FindArg(args, "--name", "-n");
-        return await send("my_command", new { name });
+        if (name == null) { Console.WriteLine("Error: --name is required"); return 1; }
+        return await sendCommand("my_command", new { name });
     }
 }
 ```
 
-2. Add a case in `Program.cs`:
+2. Register it in `Program.cs` → `CreateRegistry()`:
 
 ```csharp
-case "my_command":
-    return await MyCommandHandler.HandleAsync(args, SendCommandAsync);
+registry.Register(new MyCommandHandler());
 ```
 
-3. Update `HelpText.cs` with the command description and example.
-4. On the Revit server side, follow [`BRIDGE_IMPLEMENTATION.md`](BRIDGE_IMPLEMENTATION.md#l5--command-handlers) to create the corresponding handler.
+3. On the Revit server side, follow [`BRIDGE_IMPLEMENTATION.md`](BRIDGE_IMPLEMENTATION.md#l5--command-handlers) to create the corresponding handler.
+
+### Option 2: Plugin Command (Third-Party)
+
+Create a separate class library project that references `RevitCliClient.Abstractions`:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RevitCliClient.Abstractions\RevitCliClient.Abstractions.csproj" />
+  </ItemGroup>
+</Project>
+```
+
+1. Implement `ICliCommand` for each command:
+
+```csharp
+using RevitCliClient.Abstractions;
+
+public class MyPluginHandler : ICliCommand
+{
+    public string CommandName => "my_plugin_command";
+    public string Description => "Plugin command";
+    public string Usage => "my_plugin_command -i <id>";
+    public CommandCategory Category => CommandCategory.Create;
+
+    public async Task<int> HandleAsync(string[] args, SendCommandFunc sendCommand)
+    {
+        var id = ArgHelper.GetInt(args, "--id", "-i");
+        if (id == null) { Console.WriteLine("Error: --id is required"); return 1; }
+        return await sendCommand("my_plugin_command", new { element_id = id.Value });
+    }
+}
+```
+
+2. Implement `IPlugin` as the entry point:
+
+```csharp
+using RevitCliClient.Abstractions;
+
+public class MyPlugin : IPlugin
+{
+    public string Name => "MyCompany.Plugin";
+    public string Version => "1.0.0";
+
+    public IEnumerable<ICliCommand> GetCommands()
+    {
+        return new ICliCommand[]
+        {
+            new MyPluginHandler()
+        };
+    }
+}
+```
+
+3. Build the project, then place the output DLL in the `plugins/` directory next to `RevitCliClient.exe`.
+
+> **Plugin publish mode compatibility:**
+>
+> | Publish Mode | Plugin Loading | How to Include Plugins |
+> |--------------|---------------|----------------------|
+> | **Single-File** | Runtime from `plugins/` directory | Place plugin DLL in `plugins/` |
+> | **Native AOT** | Not supported (no reflection) | Add `<ProjectReference>` to `RevitCliClient.csproj` |
+>
+> For AOT mode, add this to `RevitCliClient.csproj`:
+> ```xml
+> <ItemGroup>
+>   <ProjectReference Include="..\MyPlugin\MyPlugin.csproj" />
+> </ItemGroup>
+> ```
+> And register the plugin in `Program.cs` → `CreateRegistry()` alongside built-in handlers.
+
+### Bridge-Side Plugin
+
+For the Revit Bridge server side, implement `IBridgeCommand` (defined in `RevitCliClient.Bridge`):
+
+```csharp
+using RevitCliClient.Bridge;
+
+public class MyBridgeHandler : IBridgeCommand
+{
+    public string CommandName => "my_plugin_command";
+
+    public static string Handle(UIApplication app, QueuedCommand cmd)
+    {
+        // Revit API implementation
+    }
+}
+```
+
+Place the compiled DLL in the `CliBridgePlugins/` directory next to the Revit add-in assembly.
 
 ## Configuration
 
