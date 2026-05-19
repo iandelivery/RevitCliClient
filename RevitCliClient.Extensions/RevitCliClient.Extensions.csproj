@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<LangVersion>latest</LangVersion>
+		<Nullable>enable</Nullable>
+		<RootNamespace>RevitCliClient.Extensions</RootNamespace>
+		<Description>Extension command plugins for RevitCliClient</Description>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\RevitCliClient.Abstractions\RevitCliClient.Abstractions.csproj" />
+	</ItemGroup>
+</Project>
