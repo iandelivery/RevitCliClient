@@ -101,17 +101,17 @@ namespace RevitCliClient
             {
                 while (!reader.EndOfStream)
                 {
-                    var readTask = reader.ReadLineAsync();
-                    var timeoutTask = Task.Delay(heartbeatTimeout);
-                    var completedFirst = await Task.WhenAny(readTask, timeoutTask);
-
-                    if (completedFirst == timeoutTask)
+                    using var cts = new CancellationTokenSource(heartbeatTimeout);
+                    string? line;
+                    try
+                    {
+                        line = await reader.ReadLineAsync(cts.Token);
+                    }
+                    catch (OperationCanceledException) when (cts.IsCancellationRequested)
                     {
                         Console.Error.WriteLine("[SSE] Heartbeat timeout (30s). Falling back to polling...");
                         return await FallbackPollLastTaskAsync(command);
                     }
-
-                    var line = await readTask;
 
                     if (string.IsNullOrEmpty(line))
                     {
