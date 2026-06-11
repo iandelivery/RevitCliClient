@@ -11,14 +11,15 @@ The Revit CLI Bridge server is a Revit add-in component that is not open source.
 ```
 ┌──────────────┐                          ┌──────────────────────────────┐
 │              │   POST /api/execute      │                              │
-│              │   {command, parameters}  │     Revit CLI Bridge         │
-│  CLI Client  │ ───────────────────────► │     (Revit Add-in)           │
-│              │                          │                              │
-│  or          │   JSON Response          │  Receives HTTP requests,     │
-│              │◄───────────────────────  │  executes on Revit main      │
-│  AI Agent    │                          │  thread, returns results.    │
-│              │   GET /api/task/{id}     │                              │
-│              │ ───────────────────────► │  See BRIDGE_IMPLEMENTATION.md│
+│              │   Accept: text/event-    │     Revit CLI Bridge         │
+│  CLI Client  │   stream                 │     (Revit Add-in)           │
+│              │ ───────────────────────► │                              │
+│  or          │                          │  Receives HTTP requests,     │
+│              │   SSE Event Stream       │  executes on Revit main      │
+│  AI Agent    │◄───────────────────────  │  thread, streams real-time   │
+│              │   event: accepted        │  progress events via SSE.    │
+│              │   event: progress        │                              │
+│              │   event: completed       │  See BRIDGE_IMPLEMENTATION.md│
 │              │                          │  for protocol spec.          │
 └──────────────┘                          └──────────────────────────────┘
 ```
@@ -28,7 +29,8 @@ The CLI client is the **left side** of this architecture — it sends HTTP reque
 ## Features
 
 - **46+ Commands** — Query, create, modify, transform, and export Revit elements
-- **Async Task Mode** — Long-running commands return a task ID for polling
+- **SSE Real-Time Events** — Server-Sent Events for live progress updates (no polling)
+- **Automatic Fallback** — Gracefully falls back to legacy polling if SSE is unavailable
 - **Type-Safe Argument Parsing** — Built-in `ArgHelper` with shortcuts for all parameters
 - **Unit Conversion** — Input in millimeters, auto-converted to Revit internal feet
 - **Single-File EXE** — Self-contained publish, no runtime installation required
@@ -198,7 +200,7 @@ RevitCliClient.exe create_wall --start-x 0 --start-y 0 --end-x 5000 --end-y 0 -l
 | `set_active_view -vi <id> \| -vn <name>`                                                        | Set active view      |
 | `zoom_to_fit [-e <id> \| --element-ids <ids>]`                                                  | Zoom to fit          |
 | `select_elements [-e <ids>]`                                                                    | Get or set selection |
-| `export_view [-o <path>] [--fit-direction <h/v>] [--zoom-type <fit/zoom>] [--dpi <72\|150\|300\|600>] [--resolution <px>] [-t <png\|jpeg\|bmp\|tiff>] [--shadow-file-type <png\|jpeg\|bmp\|tiff>] [--pixel-size <px>] [--export-range <current_view\|visible_region>]` | Export view as image |
+| `export_view [-o <path>] [--dpi <72\|150\|300\|600>] [--resolution <px>] [-t <type>] [...]` | Export view as image |
 | `batch_export -f <pdf\|dwg\|img> --view-ids <ids> \| --sheet-ids <ids> \| -a [-o <path>]`       | Batch export         |
 
 ### Raw JSON
@@ -441,7 +443,21 @@ RevitCliClient.exe unhide_elements -e 599906,599841 -vi 3001
 
 ## HTTP API
 
-AI agents can call the REST API directly without the CLI client. For the full API specification, see [`BRIDGE_IMPLEMENTATION.md`](BRIDGE_IMPLEMENTATION.md#http-api-contract).
+AI agents can call the REST API directly without the CLI client. The API supports both SSE and legacy JSON modes:
+
+**SSE mode** (send `Accept: text/event-stream`):
+```bash
+curl -s -N -H "Accept: text/event-stream" -H "Content-Type: application/json" \
+  -d '{"command":"ping"}' http://localhost:5000/api/execute
+```
+
+**Legacy JSON mode** (default):
+```bash
+curl -s -H "Content-Type: application/json" \
+  -d '{"command":"ping"}' http://localhost:5000/api/execute
+```
+
+For the full API specification, see [`BRIDGE_IMPLEMENTATION.md`](BRIDGE_IMPLEMENTATION.md#http-api-contract).
 
 ## Project Structure
 
@@ -456,8 +472,10 @@ RevitCliClient.Abstractions/          # Plugin interfaces (open source)
 └── RevitCliClient.Abstractions.csproj # netstandard2.0 + net8.0
 
 RevitCliClient/                       # Core CLI client (open source)
-├── Program.cs                        # CLI entry point, plugin-based routing
+├── Program.cs                        # CLI entry point, arg parsing + dispatch
+├── SseClient.cs                      # SSE stream consumer with legacy fallback
 ├── CommandRegistry.cs                # Command registry
+├── CommandRegistryFactory.cs         # Handler registration + plugin loading
 ├── PluginLoader.cs                   # Runtime plugin loader
 ├── HelpText.cs                       # Dynamic help text generation
 ├── RevitCliClient.csproj
@@ -488,7 +506,7 @@ The CLI client uses a plugin-based command system:
 │  │ IPlugin       │    │ PluginLoader │    │ Command   │  │
 │  │ Interface     │◄───│ (runtime)    │◄───│ Registry  │  │
 │  └───────────────┘    └──────────────┘    └───────────┘  │
-│         ▲                                   ▲            │
+│         ▲                                    ▲           │
 │  ┌──────┴────────┐                    ┌──────┴───────┐   │
 │  │ Abstractions  │                    │ Built-in     │   │
 │  │ (interfaces)  │                    │ Handlers     │   │
@@ -568,18 +586,25 @@ if (ArgHelper.HasFlag(args, "--all", "-a")) { ... }
 var ids = ArgHelper.ParseIds("599906,599841,599951");
 ```
 
-### Async Task Polling
+### SSE Event Streaming
 
-When the Revit server returns `{status: "pending", task_id: "..."}`, the CLI client automatically polls for the result:
+The CLI client uses Server-Sent Events (SSE) by default for all commands. When a command is executed, the client sends `Accept: text/event-stream` and receives real-time events:
 
 ```
-POST /api/execute → {task_id, status: "pending"}
+POST /api/execute (Accept: text/event-stream)
     │
-    ▼  (automatic polling every 500ms)
-GET /api/task/{task_id} → {status: "running", progress: 50}
-    │
-GET /api/task/{task_id} → {status: "completed", result: {...}}
+    ▼  event: accepted   → {task_id, status:"pending", command}
+    ▼  event: progress   → {task_id, progress:33, message:"Creating wall 1/3"}
+    ▼  event: progress   → {task_id, progress:67, message:"Creating wall 2/3"}
+    ▼  event: completed  → {task_id, status:"completed", result:{...}}
 ```
+
+**Benefits over polling:**
+- Single HTTP connection instead of N polling requests
+- Zero-latency progress updates (no 500ms polling interval)
+- Heartbeat mechanism detects connection loss (30s timeout)
+
+**Fallback:** If the server doesn't support SSE (returns `application/json` instead of `text/event-stream`), the client automatically falls back to legacy polling via `GET /api/task/{id}`.
 
 ## Unit Convention
 
