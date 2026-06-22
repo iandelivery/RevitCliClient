@@ -90,6 +90,29 @@ public class TaskInfo
 
     [JsonIgnore]
     public TaskCompletionSource<string> Tcs { get; set; } = new();
+
+    /// <summary>
+    /// SSE event broadcast delegate. Subscribers receive (eventName, jsonPayload).
+    /// </summary>
+    [JsonIgnore]
+    public event Action<string, string>? OnSseEvent;
+
+    /// <summary>
+    /// Broadcast an SSE event to all subscribers.
+    /// </summary>
+    public void Broadcast(string eventName, object payload)
+    {
+        var json = JsonConvert.SerializeObject(payload);
+        OnSseEvent?.Invoke(eventName, json);
+    }
+
+    /// <summary>
+    /// Remove all SSE subscribers to prevent memory leaks.
+    /// </summary>
+    public void ClearSseSubscribers()
+    {
+        OnSseEvent = null;
+    }
 }
 
 public static class TaskRegistry
@@ -105,10 +128,55 @@ public static class TaskRegistry
         return info;
     }
 
-    public static void SetRunning(string taskId) { /* update status + started_at */ }
-    public static void SetProgress(string taskId, int pct, string? msg = null) { /* update progress */ }
-    public static void SetCompleted(string taskId, string resultJson) { /* update + signal Tcs */ }
-    public static void SetFailed(string taskId, string errorJson) { /* update + signal Tcs */ }
+    public static void SetRunning(string taskId)
+    {
+        if (Tasks.TryGetValue(taskId, out var task))
+        {
+            task.Status = "running";
+            task.StartedAt = DateTime.Now;
+            task.Broadcast("progress", new { task_id = taskId, progress = 0, message = "Execution started" });
+        }
+    }
+
+    public static void SetProgress(string taskId, int pct, string? msg = null)
+    {
+        if (Tasks.TryGetValue(taskId, out var task))
+        {
+            task.Progress = pct;
+            if (msg != null) task.ProgressMessage = msg;
+            task.Broadcast("progress", new { task_id = taskId, progress = pct, message = msg });
+        }
+    }
+
+    public static void SetCompleted(string taskId, string resultJson)
+    {
+        if (Tasks.TryGetValue(taskId, out var task))
+        {
+            task.Status = "completed";
+            task.ResultJson = resultJson;
+            task.CompletedAt = DateTime.Now;
+            task.Broadcast("completed", new { task_id = taskId, status = "completed", result = SafeParseJson(resultJson) });
+            task.Tcs.SetResult(resultJson);
+        }
+    }
+
+    public static void SetFailed(string taskId, string errorJson)
+    {
+        if (Tasks.TryGetValue(taskId, out var task))
+        {
+            task.Status = "failed";
+            task.ResultJson = errorJson;
+            task.CompletedAt = DateTime.Now;
+            task.Broadcast("failed", new { task_id = taskId, status = "failed", result = SafeParseJson(errorJson) });
+            task.Tcs.SetResult(errorJson);
+        }
+    }
+
+    private static object SafeParseJson(string json)
+    {
+        try { return JObject.Parse(json); }
+        catch { return json; }
+    }
 }
 ```
 
@@ -182,7 +250,7 @@ public static class CommandRouter
 
 ### L4.1 — Bridge Plugin Loading
 
-The Bridge server supports loading proprietary command handlers from external DLLs at startup. This mirrors the CLI client's plugin architecture.
+The Bridge server supports loading plugin command handlers from external DLLs at startup. This mirrors the CLI client's plugin architecture.
 
 **Plugin interface** (defined in `RevitCliClient.Bridge`):
 
@@ -364,7 +432,82 @@ This is the protocol that the CLI Bridge server **must** implement to be compati
 | `task_id` | `string` | No | Auto-generated if omitted |
 | `async` | `bool` | No | Default: false |
 
-**Sync mode response (default):**
+The response format depends on the `Accept` header:
+
+#### SSE Mode (recommended)
+
+Send `Accept: text/event-stream` to receive real-time events via Server-Sent Events. This is the default mode used by the CLI client.
+
+**Request:**
+
+```
+POST /api/execute HTTP/1.1
+Accept: text/event-stream
+Content-Type: application/json
+
+{"command": "create_wall", "parameters": {...}}
+```
+
+**Response:** `Content-Type: text/event-stream`
+
+The server keeps the HTTP connection open and pushes events until the task reaches a terminal state (`completed` or `failed`).
+
+**Event types:**
+
+| Event | Trigger | Payload |
+|-------|---------|---------|
+| `accepted` | Task created and queued | `{task_id, status:"pending", command}` |
+| `progress` | `TaskRegistry.SetProgress()` called | `{task_id, progress, message}` |
+| `completed` | Task succeeded | `{task_id, status:"completed", result}` |
+| `failed` | Task failed or timed out | `{task_id, status:"failed", result}` |
+| `heartbeat` | Every 15s while task is running | `{}` |
+
+**Example stream:**
+
+```
+event: accepted
+data: {"task_id":"abc-123","status":"pending","command":"create_walls"}
+
+event: progress
+data: {"task_id":"abc-123","progress":0,"message":"Execution started"}
+
+event: progress
+data: {"task_id":"abc-123","progress":33,"message":"Creating wall 1/3"}
+
+event: progress
+data: {"task_id":"abc-123","progress":67,"message":"Creating wall 2/3"}
+
+event: progress
+data: {"task_id":"abc-123","progress":100,"message":"Creating wall 3/3"}
+
+event: completed
+data: {"task_id":"abc-123","status":"completed","result":{"task_id":"abc-123","status":"success","data":{"count":3}}}
+```
+
+**SSE connection lifecycle:**
+
+```
+Client connects (Accept: text/event-stream)
+    │
+    ▼
+Server sends "accepted" event
+    │
+    ▼
+Server sends "progress" events as task executes
+    │   (heartbeat every 15s if no other events)
+    │
+    ▼
+Server sends "completed" or "failed" event
+    │
+    ▼
+Server closes connection and cleans up subscribers
+```
+
+**Client disconnect handling:** If the client disconnects mid-stream, the server detects the write failure, cancels the heartbeat loop, and cleans up. The task continues executing on the Revit thread — results are still available via `GET /api/task/{id}`.
+
+**Fallback:** If the server does not support SSE (or the client doesn't send the `Accept` header), the server responds with `application/json` using the legacy sync/async modes below.
+
+#### Sync Mode (legacy)
 
 The HTTP connection is held until the command completes or times out.
 
@@ -377,18 +520,19 @@ The HTTP connection is held until the command completes or times out.
 }
 ```
 
-**Async mode response:**
+#### Async Mode (legacy)
 
 Immediately returns a task ID. The client polls `/api/task/{id}` for the result.
 
 ```json
 {
     "task_id": "abc-123",
-    "status": "pending"
+    "status": "pending",
+    "message": "Task submitted. Poll GET /api/task/{task_id} for status."
 }
 ```
 
-**Error response:**
+#### Error response
 
 ```json
 {
@@ -456,9 +600,42 @@ List all tasks (latest 50). Returns an array of task objects.
 }
 ```
 
-## Sync vs Async Execution Flow
+## Sync vs Async vs SSE Execution Flow
 
-### Sync Mode
+### SSE Mode (recommended)
+
+```
+HTTP POST /api/execute (Accept: text/event-stream)
+    │
+    ▼
+1. Parse JSON → command + parameters
+    │
+    ▼
+2. Set SSE response headers (Content-Type: text/event-stream)
+    │
+    ▼
+3. Create TaskInfo, subscribe OnSseEvent to response stream
+    │
+    ▼
+4. Send "accepted" event → {task_id, status:"pending", command}
+    │
+    ▼
+5. Enqueue to CommandQueue, ExternalEvent.Raise()
+    │
+    ▼
+6. Heartbeat loop (15s interval) + await taskInfo.Tcs.Task
+    │
+    │   Revit main thread executes:
+    │   ├── SetRunning()  → broadcasts "progress" event (0%)
+    │   ├── SetProgress() → broadcasts "progress" events
+    │   ├── SetCompleted() → broadcasts "completed" event
+    │   └── SetFailed()   → broadcasts "failed" event
+    │
+    ▼
+7. Terminal event received → cleanup subscribers → close connection
+```
+
+### Sync Mode (legacy)
 
 ```
 HTTP POST /api/execute
@@ -513,8 +690,14 @@ HTTP POST /api/execute {async: true}
 │  │ Receive     │───►│ IExternalEventHandler    │    │
 │  │ Create Task │    │   .Execute()             │    │
 │  │ Enqueue     │    │  CommandRouter.Execute() │    │
-│  │ await TCS   │◄───│  SetCompleted/SetFailed  │    │
-│  │ Return      │    │                          │    │
+│  │             │    │                          │    │
+│  │ SSE mode:   │◄───│  SetRunning/SetProgress  │    │
+│  │ Broadcast   │    │  SetCompleted/SetFailed  │    │
+│  │ → stream    │    │  → OnSseEvent broadcast  │    │
+│  │             │    │                          │    │
+│  │ Legacy:     │◄───│  Tcs.SetResult()         │    │
+│  │ await TCS   │    │                          │    │
+│  │ Return JSON │    │                          │    │
 │  └─────────────┘    └──────────────────────────┘    │
 └─────────────────────────────────────────────────────┘
 ```

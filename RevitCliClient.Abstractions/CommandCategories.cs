@@ -1,9 +1,9 @@
-// SPDX-License-Identifier: MIT
 namespace RevitCliClient.Abstractions
 {
     public enum CommandCategory
     {
         System,
+        Document,
         Query,
         Create,
         Modify,
@@ -18,6 +18,7 @@ namespace RevitCliClient.Abstractions
         public static string GetDisplayName(this CommandCategory category) => category switch
         {
             CommandCategory.System => "System",
+            CommandCategory.Document => "Document",
             CommandCategory.Query => "Document & Query",
             CommandCategory.Create => "Create",
             CommandCategory.Modify => "Modify",
