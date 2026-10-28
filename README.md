@@ -1,6 +1,6 @@
 # RevitCliClient[DEPRECATED]
 
-> Active Repository: Please note that development has moved to the active repository at github.com/iandelivery/RevitCLI.
+> Active Repository: Please note that development has moved to the active repository at [github.com/iandelivery/RevitCLI](https://github.com/iandelivery/RevitCLI).
 
 A standalone command-line client that enables AI agents to drive Autodesk Revit through a CLI or HTTP API. This client is open source and communicates with the Revit CLI Bridge server running inside Revit via HTTP, converting CLI commands into Revit API operations.
 
